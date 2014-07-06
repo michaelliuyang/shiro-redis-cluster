@@ -1,0 +1,153 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<beans xmlns="http://www.springframework.org/schema/beans" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+       xsi:schemaLocation="http://www.springframework.org/schema/beans http://www.springframework.org/schema/beans/spring-beans-3.1.xsd"
+       default-lazy-init="true">
+
+    <description>Shiro Demo Configuration</description>
+
+    <bean id="shiroConfig" class="org.springframework.beans.factory.config.PropertyPlaceholderConfigurer">
+        <property name="locations">
+            <list>
+                <value>classpath*:shiro-config.properties</value>
+            </list>
+        </property>
+        <property name="ignoreUnresolvablePlaceholders" value="true"/>
+    </bean>
+
+    <!--
+        单机/集群配置说明:
+        1.如采用单机的shiro配置
+          securityManager的sessionManager属性不需要注入，shiro会使用默认的serlvet容器实现的sessionManager;
+          securityManager的cahceManager属性需要注入，shiro自带的本机内存缓存实现类memoryConstrainedCacheManager;
+        2.如果采用集群部署方案
+          securityManager的sessionManager属性需要注入，shiro自带的defaultWebSessionManager（web实现）;
+          securityManager的cahceManager属性需要注入，自己实现的cacheManager类customShiroCacheManager
+    -->
+
+    <!-- shiro's main business-tier object for web-enabled applications -->
+    <bean id="securityManager" class="org.apache.shiro.web.mgt.DefaultWebSecurityManager">
+        <property name="sessionManager" ref="defaultWebSessionManager"/>
+        <property name="realm" ref="shiroDbRealm"/>
+        <property name="cacheManager" ref="customShiroCacheManager"/>
+    </bean>
+
+    <!-- custom shiro session listener -->
+    <bean id="customSessionListener" class="com.michaelliuyang.shiro.demo.listener.CustomSessionListener">
+        <property name="shiroSessionRepository" ref="jedisShiroSessionRepository"/>
+    </bean>
+
+    <!-- custom realm -->
+    <bean id="shiroDbRealm" class="com.michaelliuyang.shiro.demo.ShiroDbRealm">
+        <property name="credentialsMatcher" ref="customCredentialsMather"/>
+        <property name="userDao" ref="userDao"/>
+    </bean>
+
+    <!-- custom validate password -->
+    <bean id="customCredentialsMather" class="com.michaelliuyang.shiro.demo.CustomShiroCredentialsMather"/>
+
+    <!-- ...AUTHENTICATION INFO CACHE BEGIN... -->
+    <!-- custom sessionDAO,must use class impl CustomShiroSessionRepository interface -->
+    <bean id="customShiroSessionDAO" class="com.michaelliuyang.shiro.demo.session.CustomShiroSessionDAO">
+        <property name="shiroSessionRepository" ref="jedisShiroSessionRepository"/>
+    </bean>
+
+    <!-- custom save session by redis class impl ShiroSessionRepository interface -->
+    <bean id="jedisShiroSessionRepository" class="com.michaelliuyang.shiro.demo.session.JedisShiroSessionRepository">
+        <property name="jedisManager" ref="jedisManager"/>
+    </bean>
+    <!-- ...AUTHENTICATION INFO CACHE END... -->
+
+    <!-- ...AUTHORIZATION INFO CACHE BEGIN... -->
+    <!-- custom shiro authorization info cache manager class-->
+    <bean id="customShiroCacheManager" class="com.michaelliuyang.shiro.demo.cache.CustomShiroCacheManager">
+        <property name="shiroCacheManager" ref="jedisShiroCacheManager"/>
+    </bean>
+
+    <!-- shiro authorization info default cache is computer memory -->
+    <!--<bean id="memoryConstrainedCacheManager" class="org.apache.shiro.cache.MemoryConstrainedCacheManager"/>-->
+
+    <!-- ShiroCacheManager interface impl class by redis,save authorization info to redis -->
+    <bean id="jedisShiroCacheManager" class="com.michaelliuyang.shiro.demo.cache.JedisShiroCacheManager">
+        <property name="jedisManager" ref="jedisManager"/>
+    </bean>
+    <!-- ...AUTHORIZATION INFO CACHE END... -->
+
+    <!-- mock user dao -->
+    <bean id="userDao" class="com.michaelliuyang.shiro.demo.dao.UserDao"/>
+
+    <!-- redis manager class -->
+    <bean id="jedisManager" class="com.michaelliuyang.shiro.demo.JedisManager">
+        <property name="jedisPool" ref="jedisPool"/>
+    </bean>
+
+    <!-- default web session manager，session expire time 20 minutes -->
+    <bean id="defaultWebSessionManager" class="org.apache.shiro.web.session.mgt.DefaultWebSessionManager">
+        <property name="globalSessionTimeout" value="${session.timeout}"/>
+        <property name="sessionDAO" ref="customShiroSessionDAO"/>
+        <property name="sessionIdCookie" ref="simpleCookie"/>
+        <property name="sessionListeners">
+            <list>
+                <ref local="customSessionListener"/>
+            </list>
+        </property>
+        <property name="sessionValidationScheduler" ref="sessionValidationScheduler"/>
+        <property name="sessionValidationSchedulerEnabled" value="true"/>
+        <property name="deleteInvalidSessions" value="true"/>
+    </bean>
+
+    <bean id="sessionValidationScheduler"
+          class="org.apache.shiro.session.mgt.ExecutorServiceSessionValidationScheduler">
+        <property name="sessionManager" ref="defaultWebSessionManager"/>
+        <property name="interval" value="${session.validate.timespan}"/>
+    </bean>
+
+    <bean id="simpleCookie" class="org.apache.shiro.web.servlet.SimpleCookie">
+        <constructor-arg index="0" value="JSESSIONID_COOKIE"/>
+        <property name="httpOnly" value="true"/>
+    </bean>
+
+    <!-- Shiro Filter
+        anon:匿名过滤器，不用登录也可以访问
+        authc:如果继续操作,需要做对应的表单验证否则不能通过
+        authcBasic:基本http验证过滤，如果不通过，跳转登录页面
+        logout:登录退出过滤器
+        noSessionCreation:没有session创建过滤器
+        perms:权限过滤器
+        port:端口过滤器，可以设置是否是指定端口如果不是跳转到登录页面
+        rest:http方法过滤器，可以指定如post不能进行访问等
+        roles:	角色过滤器，判断当前用户是否指定角色
+        ssl:请求需要通过ssl，如果不是跳转回登录页
+        user:如果访问一个已知用户，比如记住我功能，走这个过滤器
+    -->
+    <bean id="shiroFilter" class="org.apache.shiro.spring.web.ShiroFilterFactoryBean">
+        <property name="securityManager" ref="securityManager"/>
+        <property name="loginUrl" value="/login"/>
+        <property name="successUrl" value="/index"/>
+        <property name="filterChainDefinitions">
+            <value>
+                /login = authc
+                /logout = logout
+                /user/** = user
+                /index/** = user
+            </value>
+        </property>
+    </bean>
+
+    <bean id="jedisPoolConfig" class="redis.clients.jedis.JedisPoolConfig">
+        <property name="maxActive" value="20"/>
+        <property name="maxIdle" value="10"/>
+        <property name="minIdle" value="5"/>
+        <property name="maxWait" value="2000"/>
+        <property name="testOnBorrow" value="true"/>
+        <property name="testOnReturn" value="true"/>
+    </bean>
+
+    <bean id="jedisPool" class="redis.clients.jedis.JedisPool">
+        <constructor-arg index="0" ref="jedisPoolConfig"/>
+        <constructor-arg index="1" value="127.0.0.1"/>
+        <constructor-arg index="2" value="6379"/>
+        <constructor-arg index="3" value="2000"/>
+        <constructor-arg index="4" value="password"/>
+    </bean>
+
+</beans>
